@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ story.title }} - Truyện Ma</title>
+    <link rel="stylesheet" href="/static/style.css">
+    <style>
+        .story-detail {
+            max-width: 800px;
+            margin: 2rem auto;
+            padding: 2rem;
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+        }
+
+        .story-cover {
+            width: 100%;
+            max-height: 400px;
+            object-fit: cover;
+            border-radius: 8px;
+            margin-bottom: 2rem;
+        }
+
+        .story-header {
+            margin-bottom: 2rem;
+            text-align: center;
+        }
+
+        .story-meta {
+            color: #7f8c8d;
+            margin: 1rem 0;
+        }
+
+        .chapter-list {
+            list-style: none;
+            margin-top: 2rem;
+        }
+
+        .chapter-item {
+            padding: 1rem;
+            border-bottom: 1px solid #eee;
+            cursor: pointer;
+            transition: background-color 0.3s;
+        }
+
+        .chapter-item:hover {
+            background-color: #f5f5f5;
+        }
+
+        .chapter-content {
+            white-space: pre-wrap;
+            line-height: 1.8;
+            font-size: 1.1rem;
+            margin-top: 2rem;
+            padding: 1rem;
+            background: #f9f9f9;
+            border-radius: 4px;
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <h1>🏮 Truyện Ma 👻</h1>
+        <nav>
+            <ul>
+                <li><a href="/">Trang Chủ</a></li>
+                <li><a href="/#newest">Mới Nhất</a></li>
+                <li><a href="/#completed">Hoàn Thành</a></li>
+            </ul>
+        </nav>
+    </header>
+
+    <main>
+        <div class="story-detail">
+            <img src="https://picsum.photos/800/400?random={{ story.id }}" alt="{{ story.title }}" class="story-cover">
+            
+            <div class="story-header">
+                <h1>{{ story.title }}</h1>
+                <div class="story-meta">
+                    <p>Số chương: {{ story.total_chapters }}</p>
+                    <p>Ngày tạo: {{ story.created_at }}</p>
+                    <p>Trạng thái: {{ "Hoàn thành" if story.is_completed else "Đang ra" }}</p>
+                </div>
+            </div>
+
+            <div class="story-outline">
+                <h2>Giới thiệu</h2>
+                <p style="white-space: pre-wrap;">{{ story.outline }}</p>
+            </div>
+
+            <div class="chapters">
+                <h2>Danh sách chương</h2>
+                <ul class="chapter-list">
+                    {% for chapter in story.chapters|sort(attribute='chapter_number') %}
+                    <li class="chapter-item" onclick="toggleChapter('chapter-{{ chapter.chapter_number }}')">
+                        <h3>Chương {{ chapter.chapter_number }}</h3>
+                        <div id="chapter-{{ chapter.chapter_number }}" class="chapter-content" style="display: none;">
+                            {{ chapter.content }}
+                        </div>
+                    </li>
+                    {% endfor %}
+                </ul>
+            </div>
+        </div>
+    </main>
+
+    <footer>
+        <p>&copy; 2024 Truyện Ma. All rights reserved.</p>
+    </footer>
+
+    <script>
+        function toggleChapter(chapterId) {
+            const chapter = document.getElementById(chapterId);
+            if (chapter.style.display === 'none') {
+                // Ẩn tất cả các chương khác
+                document.querySelectorAll('.chapter-content').forEach(el => {
+                    el.style.display = 'none';
+                });
+                // Hiện chương được chọn
+                chapter.style.display = 'block';
+            } else {
+                chapter.style.display = 'none';
+            }
+        }
+    </script>
+</body>
+</html> 

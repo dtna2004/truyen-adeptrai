@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Truyện Ma</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+    <header>
+        <h1>🏮 Truyện Ma 👻</h1>
+        <nav>
+            <ul>
+                <li><a href="#" class="active">Trang Chủ</a></li>
+                <li><a href="#newest">Mới Nhất</a></li>
+                <li><a href="#completed">Hoàn Thành</a></li>
+            </ul>
+        </nav>
+    </header>
+
+    <main>
+        <section id="newest">
+            <h2>Truyện Mới Cập Nhật</h2>
+            <div class="story-grid" id="newest-stories">
+                <!-- Truyện sẽ được thêm vào đây bằng JavaScript -->
+            </div>
+        </section>
+
+        <section id="completed">
+            <h2>Truyện Đã Hoàn Thành</h2>
+            <div class="story-grid" id="completed-stories">
+                <!-- Truyện sẽ được thêm vào đây bằng JavaScript -->
+            </div>
+        </section>
+    </main>
+
+    <footer>
+        <p>&copy; 2024 Truyện Ma. All rights reserved.</p>
+    </footer>
+
+    <script src="{{ url_for('static', filename='script.js') }}"></script>
+</body>
+</html> 
