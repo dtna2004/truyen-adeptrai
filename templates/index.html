@@ -4,11 +4,10 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Truyện Ma</title>
-    <link rel="stylesheet" href="static/styles.css">
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>
 <body>
     <header>
-
         <h1>🏮 Truyện Ma 👻</h1>
         <nav>
             <ul>
@@ -39,6 +38,6 @@
         <p>&copy; 2024 Truyện Ma. All rights reserved.</p>
     </footer>
 
-    <script src="static/script.js"></script>
+    <script src="{{ url_for('static', filename='script.js') }}"></script>
 </body>
 </html> 
