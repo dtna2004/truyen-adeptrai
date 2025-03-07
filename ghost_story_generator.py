@@ -11,6 +11,72 @@ from fpdf import FPDF
 import tempfile
 import time
 import random
+from PIL import Image
+import io
+from gtts import gTTS
+from moviepy.editor import *
+import nltk
+from nltk.tokenize import sent_tokenize, word_tokenize
+import numpy as np
+import google.generativeai as genai
+from io import BytesIO
+from googletrans import Translator
+import base64
+import zhipuai
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
+
+# API Endpoints and Keys
+SD_API_ENDPOINT = os.getenv('SD_API_ENDPOINT', 'https://api.stability.ai/v1/generation/stable-diffusion-xl-1024-v1-0/text-to-image')
+SD_API_KEYS = os.getenv('SD_API_KEYS', '').split(',')
+SD_API_KEYS = [key.strip() for key in SD_API_KEYS if key.strip()]
+COGVIEW_API_KEY = os.getenv('COGVIEW_API_KEY')
+zhipuai.api_key = COGVIEW_API_KEY
+GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')
+COLAB_API_URL = os.getenv('COLAB_API_URL', 'http://localhost:5000')
+
+# FPT API Keys
+FPT_API_KEYS = os.getenv('FPT_API_KEYS', 'rNz01K70Q2lG9s2tvF5oGUyQFa16EiwA').split(',')
+FPT_API_KEYS = [key.strip() for key in FPT_API_KEYS if key.strip()]
+
+def save_fpt_api_keys(api_keys):
+    """Lưu danh sách API key FPT vào file .env"""
+    try:
+        # Đọc nội dung hiện tại của file .env
+        env_content = ""
+        if os.path.exists('.env'):
+            with open('.env', 'r', encoding='utf-8') as f:
+                env_content = f.read()
+        
+        # Tìm và thay thế hoặc thêm mới biến FPT_API_KEYS
+        api_keys_str = ','.join(api_keys)
+        if 'FPT_API_KEYS=' in env_content:
+            # Thay thế giá trị cũ
+            env_lines = env_content.splitlines()
+            new_lines = []
+            for line in env_lines:
+                if line.startswith('FPT_API_KEYS='):
+                    new_lines.append(f'FPT_API_KEYS={api_keys_str}')
+                else:
+                    new_lines.append(line)
+            env_content = '\n'.join(new_lines)
+        else:
+            # Thêm biến mới
+            env_content += f'\nFPT_API_KEYS={api_keys_str}'
+        
+        # Lưu lại file .env
+        with open('.env', 'w', encoding='utf-8') as f:
+            f.write(env_content)
+        
+        return True
+    except Exception as e:
+        st.error(f"Lỗi khi lưu API keys: {str(e)}")
+        return False
+
+# Download NLTK data
+nltk.download('punkt')
 
 # Cấu hình API
 API_KEYS = [
@@ -261,6 +327,28 @@ def generate_arc_outline(story_outline, arc_number, num_chapters):
 def generate_chapter(chapter_outline, story_outline, chapter_number, total_chapters, word_count, warnings=None):
     """Tạo nội dung chương với nhiều phong cách và chi tiết hơn"""
     
+    # Lấy tóm tắt các chương trước
+    previous_chapters_summary = ""
+    if chapter_number > 1:
+        conn = get_db()
+        c = conn.cursor()
+        c.execute('''SELECT chapter_number, content FROM chapters 
+                     WHERE story_id = (
+                         SELECT story_id FROM chapters 
+                         WHERE chapter_number = ? 
+                         LIMIT 1
+                     ) AND chapter_number < ?
+                     ORDER BY chapter_number''', (chapter_number, chapter_number))
+        prev_chapters = c.fetchall()
+        conn.close()
+        
+        if prev_chapters:
+            previous_chapters_summary = "\n".join([
+                f"Chương {ch[0]}: {ch[1][:200]}..." for ch in prev_chapters
+            ])
+        else:
+            previous_chapters_summary = "Chưa có chương trước."
+    
     # Xác định phong cách và nội dung dựa trên cảnh báo
     content_style = ""
     if warnings:
@@ -285,7 +373,6 @@ def generate_chapter(chapter_outline, story_outline, chapter_number, total_chapt
             """
     
     # Tạo danh sách các kiểu mở đầu đa dạng
-    # Tạo danh sách các kiểu mở đầu đa dạng
     opening_styles = [
         "Bắt đầu với một cảnh hành động gay cấn",
         "Mở đầu bằng đối thoại ấn tượng",
@@ -296,29 +383,8 @@ def generate_chapter(chapter_outline, story_outline, chapter_number, total_chapt
         "Bắt đầu với một sự kiện bất ngờ",
         "Mở đầu bằng một hồi tưởng",
         "Bắt đầu với một câu hỏi đầy triết lý",
-        "Mở đầu theo phong cách báo chí hoặc tài liệu",
-        "Bắt đầu bằng một mô tả chi tiết về khung cảnh",
-        "Khởi đầu từ góc nhìn của một nhân vật không ngờ tới",
-        "Bắt đầu với một tin nhắn hoặc lá thư bí ẩn",
-        "Mở đầu bằng một lời tiên tri hoặc cảnh báo",
-        "Khởi đầu với một câu nói nội tâm đầy cảm xúc",
-        "Bắt đầu với một bức tranh hoặc vật thể đặc biệt",
-        "Mở đầu bằng một bản ghi âm hoặc nhật ký",
-        "Bắt đầu với một bài thơ hoặc câu hát liên quan đến câu chuyện",
-        "Mở đầu bằng một sự kiện lịch sử hoặc giả tưởng",
-        "Bắt đầu với một đoạn mô tả thời tiết tạo bầu không khí",
-        "Khởi đầu với một giấc mơ hoặc cơn ác mộng",
-        "Mở đầu bằng một cuộc trò chuyện điện thoại quan trọng",
-        "Bắt đầu với một cảnh sinh hoạt thường ngày của nhân vật chính",
-        "Mở đầu với một nhân vật bị truy đuổi",
-        "Bắt đầu bằng một nhân vật đang ở trong tình huống nguy cấp",
-        "Mở đầu với một câu đố hoặc bí ẩn cần giải quyết",
-        "Bắt đầu bằng một lễ hội hoặc sự kiện đông người",
-        "Khởi đầu từ một nhân vật đang chạy trốn hoặc giấu giếm điều gì đó",
-        "Bắt đầu với một nhân vật tỉnh dậy ở nơi xa lạ",
-        "Mở đầu bằng một cú twist ngay từ câu đầu tiên"
+        "Mở đầu theo phong cách báo chí hoặc tài liệu"
     ]
-
     
     # Chọn ngẫu nhiên kiểu mở đầu
     opening_style = random.choice(opening_styles)
@@ -327,22 +393,30 @@ def generate_chapter(chapter_outline, story_outline, chapter_number, total_chapt
         {"role": "system", "content": f"""Bạn là một nhà văn chuyên nghiệp.
         Hãy viết chương {chapter_number}/{total_chapters} với độ dài khoảng {word_count} từ.
         
-        Dựa vào khung truyện sau:
+        Tóm tắt toàn bộ truyện:
         {story_outline}
+        
+        Tóm tắt các chương trước:
+        {previous_chapters_summary}
+        
+        Outline chương hiện tại:
+        {chapter_outline}
         
         Phong cách và yêu cầu đặc biệt:
         {content_style}
         
         Yêu cầu chung:
         - {opening_style}
+        - Đảm bảo tính liên tục và nhất quán với các chương trước
         - Phát triển tình tiết tự nhiên, không gượng ép
         - Xây dựng tâm lý và cảm xúc nhân vật sâu sắc
         - Tạo ra những tình huống bất ngờ nhưng hợp lý
         - Kết hợp hài hòa giữa miêu tả, đối thoại và hành động
         - Sử dụng ngôn ngữ phù hợp với thể loại và đối tượng độc giả
         - Tạo điểm nhấn và cao trào cho chương
+        - Duy trì sự phát triển của các nhân vật và mạch truyện chính
         """},
-        {"role": "user", "content": f"Viết chương {chapter_number} dựa trên outline: {chapter_outline}"}
+        {"role": "user", "content": f"Viết chương {chapter_number} dựa trên outline đã cho và đảm bảo tính liên tục với các chương trước"}
     ]
     return call_api(messages, max_tokens=word_count * 2)
 
@@ -408,70 +482,91 @@ def enhance_selected_text(text, enhancement_type):
     ]
     return call_api(messages, max_tokens=500)
 
-def text_to_speech(text, voice="banmai", speed="", api_key="rNz01K70Q2lG9s2tvF5oGUyQFa16EiwA"):
-    """Chuyển đổi text thành speech sử dụng FPT API"""
-    url = 'https://api.fpt.ai/hmi/tts/v5'
-    headers = {
-        'api-key': api_key,
-        'speed': speed,
-        'voice': voice
-    }
+def text_to_speech(text, voice="banmai", speed="", api_key=None):
+    """Chuyển đổi text thành speech sử dụng FPT API với nhiều API key"""
+    global FPT_API_KEYS
     
-    try:
-        response = requests.post(url, data=text.encode('utf-8'), headers=headers)
-        if response.status_code == 200:
-            response_data = response.json()
-            if 'async' in response_data:
-                # Tải file audio về
-                audio_url = response_data['async']
-                try:
+    if not FPT_API_KEYS:
+        FPT_API_KEYS = ["rNz01K70Q2lG9s2tvF5oGUyQFa16EiwA"]  # API key mặc định
+    
+    # Nếu có api_key được chỉ định, thử với key đó trước
+    if api_key:
+        keys_to_try = [api_key] + [k for k in FPT_API_KEYS if k != api_key]
+    else:
+        keys_to_try = FPT_API_KEYS
+    
+    url = 'https://api.fpt.ai/hmi/tts/v5'
+    
+    # Thử với từng API key cho đến khi thành công
+    for current_key in keys_to_try:
+        try:
+            headers = {
+                'api-key': current_key,
+                'speed': speed,
+                'voice': voice
+            }
+            
+            response = requests.post(url, data=text.encode('utf-8'), headers=headers)
+            if response.status_code == 200:
+                response_data = response.json()
+                if 'async' in response_data:
+                    audio_url = response_data['async']
+                    
                     # Tạo thư mục audio nếu chưa có
                     os.makedirs('static/audio', exist_ok=True)
-                    # Tạo tên file duy nhất
                     audio_filename = f"audio_{uuid.uuid4()}.mp3"
                     audio_path = os.path.join('static/audio', audio_filename)
                     
                     # Thử tải file audio với nhiều lần thử
-                    max_retries = 5  # Số lần thử tối đa
-                    retry_delay = 5   # Số giây đợi giữa các lần thử
+                    max_retries = 10  # Tăng số lần thử
+                    retry_delay = 3   # Giảm thời gian đợi giữa các lần thử
                     
                     for attempt in range(max_retries):
                         try:
-                            # Đợi trước khi thử tải
                             time.sleep(retry_delay)
                             
-                            # Tải file audio với timeout 30 giây
-                            audio_response = requests.get(audio_url, timeout=30)
+                            # Kiểm tra trạng thái audio trước khi tải
+                            status_response = requests.get(audio_url, timeout=10)
                             
-                            # Kiểm tra kích thước file
-                            if audio_response.status_code == 200 and len(audio_response.content) > 0:
-                                with open(audio_path, 'wb') as f:
-                                    f.write(audio_response.content)
-                                # Kiểm tra file đã được tạo thành công
-                                if os.path.exists(audio_path) and os.path.getsize(audio_path) > 0:
-                                    return True, {'url': audio_url, 'local_path': audio_path}
-                            elif audio_response.status_code == 404:
-                                if attempt < max_retries - 1:  # Nếu còn lần thử
-                                    continue  # Thử lại
+                            if status_response.status_code == 200:
+                                # Tải file audio
+                                audio_response = requests.get(audio_url, timeout=30)
+                                
+                                if len(audio_response.content) > 1000:  # Kiểm tra kích thước tối thiểu
+                                    with open(audio_path, 'wb') as f:
+                                        f.write(audio_response.content)
+                                    
+                                    if os.path.exists(audio_path) and os.path.getsize(audio_path) > 1000:
+                                        return True, {'url': audio_url, 'local_path': audio_path}
+                                    
+                            elif status_response.status_code == 404:
+                                if attempt < max_retries - 1:
+                                    continue
                                 else:
-                                    return False, f"Không thể tải file audio sau {max_retries} lần thử"
-                            else:
-                                return False, f"Lỗi khi tải file: HTTP {audio_response.status_code}"
+                                    break  # Thử API key tiếp theo
+                                    
                         except requests.Timeout:
-                            if attempt < max_retries - 1:  # Nếu còn lần thử
-                                continue  # Thử lại
+                            if attempt < max_retries - 1:
+                                continue
                             else:
-                                return False, f"Hết thời gian chờ sau {max_retries} lần thử"
+                                break  # Thử API key tiếp theo
+                                
                         except Exception as e:
-                            return False, f"Lỗi khi tải audio: {str(e)}"
+                            if attempt < max_retries - 1:
+                                continue
+                            else:
+                                break  # Thử API key tiếp theo
                     
-                    return False, "Không thể tải file audio sau nhiều lần thử"
-                except Exception as e:
-                    return False, f"Lỗi khi xử lý file audio: {str(e)}"
-            return False, "Không nhận được URL âm thanh"
-        return False, f"Lỗi API: {response.text}"
-    except Exception as e:
-        return False, f"Lỗi: {str(e)}"
+                    # Nếu đã thử hết số lần với API key hiện tại, tiếp tục với API key khác
+                    continue
+                    
+            elif response.status_code == 401:  # API key không hợp lệ
+                continue  # Thử API key tiếp theo
+                
+        except Exception as e:
+            continue  # Thử API key tiếp theo
+    
+    return False, "Không thể tạo audio sau khi thử tất cả API key. Vui lòng kiểm tra lại API key hoặc thử lại sau."
 
 def get_story_data(story_id):
     conn = get_db()
@@ -487,16 +582,31 @@ def get_story_data(story_id):
     
     if story:
         # Lấy tên truyện từ dòng đầu tiên của outline
-        title = story[0].split('\n')[0]
-        total_chapters = len(chapters)
-        is_completed = total_chapters > 0 and total_chapters == int(story[0].split("Danh sách")[1].split("chương")[0].strip())
+        title = story[0].split('\n')[0] if story[0] else "Không có tiêu đề"
+        
+        # Đếm tổng số chương từ outline một cách an toàn
+        try:
+            # Tìm phần "Danh sách X chương"
+            if "Danh sách" in story[0]:
+                parts = story[0].split("Danh sách")
+                if len(parts) > 1:
+                    num_str = parts[1].split("chương")[0].strip()
+                    total_chapters = int(num_str) if num_str.isdigit() else 10
+                else:
+                    total_chapters = 10
+            else:
+                # Đếm số lần xuất hiện của "Chương" trong outline
+                chapter_count = story[0].lower().count("chương")
+                total_chapters = chapter_count if chapter_count > 0 else 10
+        except:
+            total_chapters = 10  # Giá trị mặc định nếu không thể xác định
         
         # Thêm audio_url vào thông tin chương
         chapter_data = []
         for chapter in chapters:
             chapter_info = {
-                    "chapter_number": chapter[0],
-                    "content": chapter[1],
+                "chapter_number": chapter[0],
+                "content": chapter[1],
                 "created_at": chapter[2],
                 "audio_url": None  # Mặc định không có audio
             }
@@ -508,7 +618,7 @@ def get_story_data(story_id):
             "outline": story[0],
             "created_at": story[1],
             "total_chapters": total_chapters,
-            "is_completed": is_completed,
+            "is_completed": len(chapters) >= total_chapters,
             "chapters": chapter_data
         }
     return None
@@ -844,115 +954,15 @@ def generate_long_chapter(chapter_outline, story_outline, chapter_number, total_
     return full_chapter
 
 def main():
-    global API_KEYS
-    st.set_page_config(layout="wide")
-    st.title("Công Cụ Tạo Truyện Tự Động 📚")
+    st.title("Trình Tạo Truyện Ma")
     
+    # Menu chính
     menu = st.sidebar.selectbox(
-        "Chọn chức năng",
-        ["Tạo Truyện Mới", "Tìm Kiếm Truyện", "Viết & Chỉnh Sửa", "Quản Lý Truyện", "Quản Lý Audio"]
+        "Chọn chức năng:",
+        ["Tạo Truyện Mới", "Danh Sách Truyện", "Tạo Audio", "Tạo Video", "Cài Đặt"]
     )
     
-    if menu == "Quản Lý Audio":
-        st.header("Quản Lý Audio")
-        
-        # Phần cấu hình API FPT
-        st.subheader("Cấu hình API FPT")
-        api_keys_str = st.text_area(
-            "Nhập các API key FPT (mỗi key một dòng):",
-            value="rNz01K70Q2lG9s2tvF5oGUyQFa16EiwA",  # API key mặc định
-            help="Thêm nhiều API key để tăng khả năng chuyển đổi"
-        )
-        fpt_api_keys = [key.strip() for key in api_keys_str.split('\n') if key.strip()]
-        
-        # Chọn truyện để tạo audio
-        stories = get_story_list()
-        if not stories:
-            st.info("Chưa có truyện nào được tạo")
-        else:
-            selected_story = st.selectbox(
-                "Chọn truyện để tạo audio:",
-                options=[story['story_id'] for story in stories],
-                format_func=lambda x: next(s['outline'].split('\n')[0] for s in stories if s['story_id'] == x)
-            )
-            
-            if selected_story:
-                story_data = get_story_data(selected_story)
-                chapters = get_story_chapters(selected_story)
-                
-                # Cấu hình giọng đọc
-                col1, col2 = st.columns(2)
-                with col1:
-                    voice = st.selectbox(
-                        "Chọn giọng đọc:",
-                        ["banmai", "thuminh", "leminh", "myan", "lannhi", "linhsan"]
-                    )
-                with col2:
-                    speed = st.slider(
-                        "Tốc độ đọc:",
-                        min_value=-3,
-                        max_value=3,
-                        value=0
-                    )
-                
-                # Hiển thị danh sách chương và nút tạo audio
-                st.subheader(f"Danh sách chương - {story_data['title']}")
-                
-                for chapter in chapters:
-                    with st.expander(f"Chương {chapter['chapter_number']}"):
-                        st.write(chapter['content'][:200] + "...")  # Hiển thị preview nội dung
-                        
-                        col1, col2 = st.columns([3, 1])
-                        with col1:
-                            # Kiểm tra xem đã có audio chưa
-                            if 'audio_url' in chapter and chapter['audio_url']:
-                                st.markdown(f"""
-                                <audio controls>
-                                    <source src="{chapter['audio_url']}" type="audio/mp3">
-                                    Trình duyệt của bạn không hỗ trợ audio.
-                                </audio>
-                                """, unsafe_allow_html=True)
-                            else:
-                                st.info("Chưa có audio")
-                        
-                        with col2:
-                            if st.button("Tạo Audio", key=f"create_audio_{chapter['chapter_number']}"):
-                                with st.spinner('Đang tạo audio...'):
-                                    # Thử với từng API key cho đến khi thành công
-                                    for api_key in fpt_api_keys:
-                                        success, result = text_to_speech(
-                                            chapter['content'],
-                                            voice=voice,
-                                            speed=str(speed),
-                                            api_key=api_key
-                                        )
-                                        if success:
-                                            st.success("Đã tạo audio thành công!")
-                                            # Hiển thị audio player
-                                            st.markdown(f"""
-                                            <audio controls>
-                                                <source src="{result['url']}" type="audio/mp3">
-                                                Trình duyệt của bạn không hỗ trợ audio.
-                                            </audio>
-                                            """, unsafe_allow_html=True)
-                                            
-                                            # Thêm nút tải về
-                                            with open(result['local_path'], 'rb') as f:
-                                                st.download_button(
-                                                    label="Tải audio về máy",
-                                                    data=f,
-                                                    file_name=f"chuong_{chapter['chapter_number']}_audio.mp3",
-                                                    mime="audio/mp3"
-                                                )
-                                            
-                                            # Lưu URL audio vào database
-                                            save_audio_url(selected_story, chapter['chapter_number'], result)
-                                            break
-                                        else:
-                                            st.error(f"Lỗi với API key {api_key[:10]}...: {result}")
-                                            continue
-    
-    elif menu == "Tạo Truyện Mới":
+    if menu == "Tạo Truyện Mới":
         st.header("Tạo Truyện Mới")
         
         # Tạo layout 2 cột cho các tùy chọn
@@ -1063,8 +1073,8 @@ def main():
             else:
                 st.warning("Vui lòng nhập ý tưởng cho truyện!")
 
-    elif menu == "Tìm Kiếm Truyện":
-        st.header("Tìm Kiếm Truyện")
+    elif menu == "Danh Sách Truyện":
+        st.header("Danh Sách Truyện")
         search_query = st.text_input("Nhập từ khóa tìm kiếm:")
         
         if search_query:
@@ -1105,353 +1115,8 @@ def main():
             else:
                 st.info("Không tìm thấy truyện nào phù hợp")
 
-    elif menu == "Viết & Chỉnh Sửa":
-        st.header("Viết & Chỉnh Sửa Truyện")
-        
-        if 'current_story' in st.session_state and 'current_outline' in st.session_state:
-            st.subheader("Khung Truyện")
-            current_outline = st.session_state['current_outline']
-            st.write(current_outline)
-            
-            # Lấy tổng số chương
-            total_chapters = get_total_chapters_from_outline(current_outline)
-            st.info(f"Tổng số chương: {total_chapters}")
-            
-            # Thêm phần quản lý arc
-            st.subheader("Quản lý phần truyện")
-            arcs = get_story_arcs(st.session_state['current_story'])
-            
-            col1, col2 = st.columns(2)
-            with col1:
-                next_arc = len(arcs) + 1
-                num_chapters = st.number_input("Số chương cho phần mới:", min_value=1, max_value=50, value=10)
-                if st.button("Tạo phần mới"):
-                    with st.spinner(f'Đang tạo outline cho phần {next_arc}...'):
-                        arc_outline = generate_arc_outline(st.session_state['current_outline'], next_arc, num_chapters)
-                        arc_id = save_arc_outline(st.session_state['current_story'], next_arc, arc_outline)
-                        st.success(f"Đã tạo phần {next_arc}")
-                        st.rerun()
-            
-            with col2:
-                if arcs:
-                    st.write(f"Đã có {len(arcs)} phần")
-                    for arc in arcs:
-                        with st.expander(f"Phần {arc['arc_number']}"):
-                            st.write(arc['outline'])
-            
-            st.markdown("---")
-            
-            # Thêm nút xuất file
-            col_export1, col_export2, col_export3 = st.columns(3)
-            with col_export1:
-                if st.button("Xuất toàn bộ truyện (Word)"):
-                    with tempfile.NamedTemporaryFile(delete=False, suffix='.docx') as tmp:
-                        if export_to_word(st.session_state['current_story'], tmp.name):
-                            with open(tmp.name, 'rb') as f:
-                                st.download_button(
-                                    "Tải xuống truyện hoàn chỉnh",
-                                    f,
-                                    file_name="truyen_ma_full.docx",
-                                    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-                                )
-            
-            with col_export2:
-                if st.button("Xuất tất cả các chương (Word)"):
-                    with tempfile.NamedTemporaryFile(delete=False, suffix='.docx') as tmp:
-                        if export_all_chapters_to_word(st.session_state['current_story'], tmp.name):
-                            with open(tmp.name, 'rb') as f:
-                                st.download_button(
-                                    "Tải xuống tất cả chương",
-                                    f,
-                                    file_name="tat_ca_chuong.docx",
-                                    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-                                )
-            
-            with col_export3:
-                if st.button("Xuất file PDF"):
-                    with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as tmp:
-                        if export_to_pdf(st.session_state['current_story'], tmp.name):
-                            with open(tmp.name, 'rb') as f:
-                                st.download_button(
-                                    "Tải xuống file PDF",
-                                    f,
-                                    file_name="truyen_ma.pdf",
-                                    mime="application/pdf"
-                                )
-            
-            # Thêm chức năng tự động tạo nhiều chương
-            st.subheader("Tự động tạo chương")
-            col_auto1, col_auto2, col_auto3 = st.columns(3)
-            with col_auto1:
-                start_chapter = st.number_input("Từ chương:", min_value=1, value=1)
-            with col_auto2:
-                end_chapter = st.number_input("Đến chương:", min_value=1, value=5)
-            with col_auto3:
-                auto_word_count = st.number_input("Số từ mỗi chương:", min_value=500, max_value=5000, value=1000, step=100)
-            
-            if st.button("Tự động tạo các chương"):
-                total_chapters = get_total_chapters_from_outline(current_outline)
-                if end_chapter > total_chapters:
-                    st.error(f"Số chương tối đa là {total_chapters}")
-                elif start_chapter > end_chapter:
-                    st.error("Chương bắt đầu phải nhỏ hơn chương kết thúc")
-                else:
-                    with st.spinner(f'Đang tạo các chương từ {start_chapter} đến {end_chapter}...'):
-                        if auto_generate_chapters(
-                            st.session_state['current_story'],
-                            start_chapter,
-                            end_chapter,
-                            auto_word_count
-                        ):
-                            st.success("Đã tạo xong các chương!")
-                            st.rerun()
-                        else:
-                            st.error("Có lỗi xảy ra khi tạo chương")
-            
-            # Hiển thị danh sách các chương đã viết
-            st.subheader("Các chương đã viết")
-            chapters = get_story_chapters(st.session_state['current_story'])
-            for chapter in chapters:
-                with st.expander(f"Chương {chapter['chapter_number']} - {chapter['created_at'].strftime('%d/%m/%Y %H:%M')}"):
-                    st.write(chapter['content'])
-                    col1, col2, col3, col4, col5 = st.columns(5)
-                    with col1:
-                        if st.button("Xóa", key=f"del_{chapter['chapter_number']}"):
-                            delete_chapter(st.session_state['current_story'], chapter['chapter_number'])
-                            st.success("Đã xóa chương!")
-                            st.rerun()
-                    with col2:
-                        if st.button("Viết lại", key=f"rewrite_{chapter['chapter_number']}"):
-                            new_content = rewrite_story(chapter['content'])
-                            save_chapter_version(st.session_state['current_story'], chapter['chapter_number'], new_content)
-                            st.success("Đã tạo phiên bản mới!")
-                    with col3:
-                        if st.button("Xem phiên bản", key=f"versions_{chapter['chapter_number']}"):
-                            versions = get_chapter_versions(st.session_state['current_story'], chapter['chapter_number'])
-                            for version in versions:
-                                st.text(f"Phiên bản {version['created_at'].strftime('%d/%m/%Y %H:%M')}")
-                                st.text_area("Nội dung:", version['content'], height=200, key=f"v_{version['version_id']}")
-                    with col4:
-                        if st.button("Chỉnh sửa", key=f"edit_{chapter['chapter_number']}"):
-                            st.session_state['editing_chapter'] = chapter['chapter_number']
-                            st.session_state['editing_content'] = chapter['content']
-                    with col5:
-                        if st.button("Xuất Word", key=f"export_{chapter['chapter_number']}"):
-                            with tempfile.NamedTemporaryFile(delete=False, suffix='.docx') as tmp:
-                                if export_chapter_to_word(chapter, tmp.name):
-                                    with open(tmp.name, 'rb') as f:
-                                        st.download_button(
-                                            f"Tải Chương {chapter['chapter_number']}",
-                                            f,
-                                            file_name=f"chuong_{chapter['chapter_number']}.docx",
-                                            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                                            key=f"download_{chapter['chapter_number']}"
-                                        )
-            
-            # Hiển thị tổng quan về tiến độ
-            st.markdown("---")
-            st.subheader("Tiến độ truyện")
-            progress = len(chapters) / total_chapters
-            st.progress(progress)
-            st.write(f"Đã viết: {len(chapters)}/{total_chapters} chương")
-            
-            st.markdown("---")
-            
-            # Khu vực viết và chỉnh sửa
-            col1, col2 = st.columns([6, 4])
-            
-            with col1:
-                st.subheader("Viết Chương Mới")
-                next_chapter = len(chapters) + 1
-                if next_chapter <= total_chapters:
-                    chapter_number = st.number_input("Số chương:", min_value=1, max_value=total_chapters, value=next_chapter)
-                    word_count = st.number_input("Số từ:", min_value=500, max_value=5000, value=1000, step=100)
-                    
-                    if st.button("Tạo nội dung chương"):
-                        chapter_content = generate_chapter(
-                            f"Viết chương {chapter_number}",
-                            st.session_state['current_outline'],
-                            chapter_number,
-                            total_chapters,
-                            word_count
-                        )
-                        st.session_state['current_chapter'] = chapter_content
-                        st.write(chapter_content)
-                    
-                    chapter_content = st.text_area(
-                        "Nội dung chương:",
-                        value=st.session_state.get('current_chapter', ''),
-                        height=400
-                    )
-                    
-                    if st.button("Lưu chương"):
-                        if 'editing_chapter' in st.session_state:
-                            # Lưu phiên bản mới khi đang chỉnh sửa
-                            save_chapter_version(st.session_state['current_story'], st.session_state['editing_chapter'], chapter_content)
-                            del st.session_state['editing_chapter']
-                        else:
-                            # Lưu chương mới
-                            save_chapter(st.session_state['current_story'], chapter_number, chapter_content)
-                        st.success("Đã lưu chương thành công!")
-                        st.rerun()
-                else:
-                    st.warning("Đã hoàn thành tất cả các chương!")
-
-        else:
-            st.info("Vui lòng chọn một truyện từ Tìm Kiếm Truyện để bắt đầu chỉnh sửa")
-
-    elif menu == "Quản Lý Truyện":
-        st.header("Quản Lý Truyện")
-        stories = get_story_list()
-        
-        if not stories:
-            st.info("Chưa có truyện nào được tạo")
-        else:
-            st.success(f"Có {len(stories)} truyện")
-            
-            # Tạo bảng hiển thị
-            col_titles = st.columns([3, 2, 1, 1, 1, 1, 1, 1])
-            col_titles[0].markdown("### Tên truyện")
-            col_titles[1].markdown("### Ngày tạo")
-            col_titles[2].markdown("### Số chương")
-            col_titles[3].markdown("### Xóa")
-            col_titles[4].markdown("### Xuất Word")
-            col_titles[5].markdown("### Xuất chương")
-            col_titles[6].markdown("### Đẩy web")
-            col_titles[7].markdown("### Audio")
-            
-            st.markdown("---")
-            
-            for story in stories:
-                # Khởi tạo session state cho xóa truyện
-                delete_key = f"delete_{story['story_id']}"
-                if delete_key not in st.session_state:
-                    st.session_state[delete_key] = False
-                
-                cols = st.columns([3, 2, 1, 1, 1, 1, 1, 1])
-                
-                # Lấy thông tin chi tiết truyện
-                story_data = get_story_data(story['story_id'])
-                title = story_data['title']
-                total_chapters = story_data['total_chapters']
-                
-                # Cột tên truyện
-                with cols[0]:
-                    st.markdown(f"**{title}**")
-                    if st.button("Xem chi tiết", key=f"view_{story['story_id']}"):
-                        st.markdown("#### Chi tiết truyện:")
-                        st.write(story['outline'])
-                
-                # Cột ngày tạo
-                with cols[1]:
-                    st.write(story['created_at'].strftime('%d/%m/%Y %H:%M'))
-                
-                # Cột số chương
-                with cols[2]:
-                    st.write(f"{total_chapters} chương")
-                
-                # Cột xóa truyện
-                with cols[3]:
-                    # Hiển thị nút xóa và xác nhận
-                    if not st.session_state[delete_key]:
-                        if st.button("🗑️", key=f"del_btn_{story['story_id']}"):
-                            st.session_state[delete_key] = True
-                    else:
-                        st.warning("Xác nhận xóa?")
-                        col1, col2 = st.columns(2)
-                        with col1:
-                            if st.button("✔️ Có", key=f"confirm_{story['story_id']}"):
-                                delete_story(story['story_id'])
-                                st.success("Đã xóa truyện!")
-                                st.rerun()
-                        with col2:
-                            if st.button("❌ Không", key=f"cancel_{story['story_id']}"):
-                                st.session_state[delete_key] = False
-                                st.rerun()
-                
-                # Cột xuất toàn bộ Word
-                with cols[4]:
-                    if st.button("📄", key=f"export_full_{story['story_id']}"):
-                        with tempfile.NamedTemporaryFile(delete=False, suffix='.docx') as tmp:
-                            if export_to_word(story['story_id'], tmp.name):
-                                with open(tmp.name, 'rb') as f:
-                                    st.download_button(
-                                        "Tải xuống",
-                                        f,
-                                        file_name=f"{title}.docx",
-                                        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                                        key=f"download_full_{story['story_id']}"
-                                    )
-                
-                # Cột xuất từng chương
-                with cols[5]:
-                    chapters = get_story_chapters(story['story_id'])
-                    if chapters:
-                        if st.button("📑", key=f"export_chapters_{story['story_id']}"):
-                            st.markdown("#### Tải xuống từng chương:")
-                            for chapter in chapters:
-                                with tempfile.NamedTemporaryFile(delete=False, suffix='.docx') as tmp:
-                                    if export_chapter_to_word(chapter, tmp.name):
-                                        with open(tmp.name, 'rb') as f:
-                                            st.download_button(
-                                                f"Chương {chapter['chapter_number']}",
-                                                f,
-                                                file_name=f"{title}_chuong_{chapter['chapter_number']}.docx",
-                                                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                                                key=f"download_chapter_{story['story_id']}_{chapter['chapter_number']}"
-                                            )
-                
-                # Cột đẩy lên web
-                with cols[6]:
-                    if st.button("🌐", key=f"publish_{story['story_id']}"):
-                        success, message = publish_to_web(story['story_id'])
-                        if success:
-                            st.success(message)
-                        else:
-                            st.error(message)
-                
-                # Cột tạo audio
-                with cols[7]:
-                    if st.button("🔊", key=f"audio_{story['story_id']}"):
-                        chapters = get_story_chapters(story['story_id'])
-                        if chapters:
-                            st.markdown("#### Tạo audio cho từng chương:")
-                            # Chọn giọng đọc
-                            voice = st.selectbox(
-                                "Chọn giọng đọc:",
-                                ["banmai", "thuminh", "leminh", "myan", "lannhi", "linhsan"],
-                                key=f"voice_{story['story_id']}"
-                            )
-                            # Chọn tốc độ đọc
-                            speed = st.slider(
-                                "Tốc độ đọc:",
-                                min_value=-3,
-                                max_value=3,
-                                value=0,
-                                key=f"speed_{story['story_id']}"
-                            )
-                            
-                            for chapter in chapters:
-                                success, result = text_to_speech(
-                                    chapter['content'],
-                                    voice=voice,
-                                    speed=str(speed)
-                                )
-                                if success:
-                                    st.markdown(f"""
-                                    ##### Chương {chapter['chapter_number']}
-                                    <audio controls>
-                                        <source src="{result['url']}" type="audio/mp3">
-                                        Trình duyệt của bạn không hỗ trợ audio.
-                                    </audio>
-                                    """, unsafe_allow_html=True)
-                                else:
-                                    st.error(f"Lỗi tạo audio cho chương {chapter['chapter_number']}: {result}")
-                
-                st.markdown("---")
-
-    elif menu == "Quản Lý Audio":
-        st.header("Quản Lý Audio")
+    elif menu == "Tạo Audio":
+        st.header("Tạo Audio Từ Truyện")
         
         # Phần cấu hình API FPT
         st.subheader("Cấu hình API FPT")
@@ -1548,6 +1213,209 @@ def main():
                                         else:
                                             st.error(f"Lỗi với API key {api_key[:10]}...: {result}")
                                             continue
+    
+    elif menu == "Tạo Video":
+        st.header("Tạo Video Từ Truyện")
+        
+        # Chọn truyện để tạo video
+        stories = get_story_list()
+        if not stories:
+            st.info("Chưa có truyện nào được tạo")
+        else:
+            # Tạo dictionary ánh xạ story_id với tên truyện
+            story_titles = {}
+            for story in stories:
+                title = story['outline'].split('\n')[0] if story['outline'] else "Không có tiêu đề"
+                story_titles[story['story_id']] = title
+            
+            selected_story = st.selectbox(
+                "Chọn truyện để tạo video:",
+                options=list(story_titles.keys()),
+                format_func=lambda x: story_titles[x]
+            )
+            
+            if selected_story:
+                story_data = get_story_data(selected_story)
+                chapters = get_story_chapters(selected_story)
+                
+                # Hiển thị thông tin truyện
+                st.subheader(f"Thông tin truyện: {story_data['title']}")
+                st.write(f"Tổng số chương: {story_data['total_chapters']}")
+                st.write(f"Số chương đã viết: {len(chapters)}")
+                
+                # Cấu hình tạo video
+                st.subheader("Cấu hình tạo video")
+                
+                col1, col2 = st.columns(2)
+                with col1:
+                    # Chọn phong cách hình ảnh
+                    style = st.selectbox(
+                        "Chọn phong cách hình ảnh",
+                        ["realistic", "anime", "digital art", "oil painting", "watercolor", 
+                         "pencil sketch", "3D render", "pixel art", "comic book"]
+                    )
+                
+                with col2:
+                    # Chọn model tạo hình ảnh
+                    model = st.selectbox(
+                        "Chọn model tạo hình ảnh",
+                        ["stable-diffusion", "cogview", "gemini"],
+                        help="""
+                        - Stable Diffusion: Cho kết quả tốt và ổn định
+                        - CogView: Phù hợp với nội dung tiếng Trung
+                        - Gemini: API mới từ Google (đang thử nghiệm)
+                        """
+                    )
+                
+                # Cấu hình giọng đọc
+                st.subheader("Cấu hình giọng đọc")
+                col3, col4 = st.columns(2)
+                with col3:
+                    voice = st.selectbox(
+                        "Chọn giọng đọc:",
+                        ["banmai", "thuminh", "leminh", "myan", "lannhi", "linhsan"]
+                    )
+                with col4:
+                    speed = st.slider(
+                        "Tốc độ đọc:",
+                        min_value=-3,
+                        max_value=3,
+                        value=0
+                    )
+                
+                # Chọn chương để tạo video
+                st.subheader("Chọn chương để tạo video")
+                selected_chapters = st.multiselect(
+                    "Chọn các chương muốn tạo video:",
+                    options=[f"Chương {chapter['chapter_number']}" for chapter in chapters],
+                    default=[f"Chương {chapters[0]['chapter_number']}"] if chapters else None
+                )
+                
+                if selected_chapters and st.button("Tạo Video"):
+                    with st.spinner('Đang tạo video...'):
+                        try:
+                            # Khởi tạo StoryContext để theo dõi nhân vật và cảnh
+                            story_context = StoryContext()
+                            
+                            for chapter_name in selected_chapters:
+                                chapter_num = int(chapter_name.split()[1])
+                                chapter = next(c for c in chapters if c['chapter_number'] == chapter_num)
+                                
+                                st.write(f"Đang xử lý {chapter_name}...")
+                                
+                                # Chia chương thành các cảnh
+                                scenes = split_text_into_scenes(chapter['content'])
+                                
+                                # Tạo hình ảnh và audio cho từng cảnh
+                                images = []
+                                audio_files = []
+                                
+                                for i, scene in enumerate(scenes):
+                                    st.write(f"Đang xử lý cảnh {i+1}/{len(scenes)}...")
+                                    
+                                    # Tạo prompt cho hình ảnh
+                                    prompt = generate_consistent_prompt(scene, story_context, style, model)
+                                    
+                                    # Tạo hình ảnh
+                                    image = generate_image(prompt, style, model)
+                                    images.append(image)
+                                    
+                                    # Tạo audio
+                                    success, result = text_to_speech(scene, voice, str(speed))
+                                    if success:
+                                        audio_files.append(result['local_path'])
+                                    else:
+                                        raise Exception(f"Lỗi khi tạo audio: {result}")
+                                
+                                # Tạo video cho chương
+                                output_path = f"chapter_{chapter_num}_video.mp4"
+                                create_video(scenes, images, audio_files, output_path)
+                                
+                                # Hiển thị video
+                                st.success(f"Đã tạo xong video cho {chapter_name}!")
+                                st.video(output_path)
+                                
+                                # Tạo nút tải xuống
+                                with open(output_path, 'rb') as f:
+                                    st.download_button(
+                                        label=f"Tải video {chapter_name}",
+                                        data=f,
+                                        file_name=f"chapter_{chapter_num}_video.mp4",
+                                        mime="video/mp4"
+                                    )
+                                
+                                # Dọn dẹp file tạm
+                                for audio_file in audio_files:
+                                    if os.path.exists(audio_file):
+                                        os.unlink(audio_file)
+                                if os.path.exists(output_path):
+                                    os.unlink(output_path)
+                                
+                        except Exception as e:
+                            st.error(f"Lỗi khi tạo video: {str(e)}")
+                            st.error("Chi tiết lỗi:")
+                            st.exception(e)
+
+    elif menu == "Cài Đặt":
+        st.header("Cài Đặt API")
+        
+        # Quản lý API key FPT
+        st.subheader("FPT Text-to-Speech API")
+        
+        # Hiển thị các API key hiện tại
+        st.write("API key hiện tại:")
+        for i, key in enumerate(FPT_API_KEYS):
+            masked_key = f"{key[:8]}...{key[-4:]}" if len(key) > 12 else key
+            st.code(f"{i+1}. {masked_key}")
+        
+        # Thêm API key mới
+        new_api_key = st.text_input("Nhập API key mới:", key="new_fpt_api_key")
+        if st.button("Thêm API Key"):
+            if new_api_key:
+                if new_api_key not in FPT_API_KEYS:
+                    FPT_API_KEYS.append(new_api_key)
+                    if save_fpt_api_keys(FPT_API_KEYS):  # Lưu vào file .env
+                        st.success("Đã thêm và lưu API key mới!")
+                    else:
+                        st.error("Thêm API key thành công nhưng không lưu được vào file .env")
+                else:
+                    st.warning("API key này đã tồn tại!")
+            else:
+                st.warning("Vui lòng nhập API key!")
+        
+        # Xóa API key
+        if len(FPT_API_KEYS) > 0:
+            st.subheader("Xóa API key")
+            key_to_remove = st.selectbox(
+                "Chọn API key cần xóa:",
+                range(len(FPT_API_KEYS)),
+                format_func=lambda x: f"API key {x+1}: {FPT_API_KEYS[x][:8]}...{FPT_API_KEYS[x][-4:]}"
+            )
+            if st.button("Xóa API Key"):
+                if len(FPT_API_KEYS) > 1:  # Đảm bảo luôn còn ít nhất 1 API key
+                    removed_key = FPT_API_KEYS.pop(key_to_remove)
+                    if save_fpt_api_keys(FPT_API_KEYS):  # Lưu vào file .env
+                        st.success(f"Đã xóa API key: {removed_key[:8]}...{removed_key[-4:]}")
+                    else:
+                        st.error("Xóa API key thành công nhưng không lưu được vào file .env")
+                else:
+                    st.error("Không thể xóa API key cuối cùng!")
+        
+        # Kiểm tra API key
+        st.subheader("Kiểm tra API key")
+        key_to_test = st.selectbox(
+            "Chọn API key cần kiểm tra:",
+            range(len(FPT_API_KEYS)),
+            format_func=lambda x: f"API key {x+1}: {FPT_API_KEYS[x][:8]}...{FPT_API_KEYS[x][-4:]}"
+        )
+        if st.button("Kiểm tra"):
+            test_text = "Xin chào, đây là bài kiểm tra API."
+            success, result = text_to_speech(test_text, api_key=FPT_API_KEYS[key_to_test])
+            if success:
+                st.success("API key hoạt động tốt!")
+                st.audio(result['local_path'])
+            else:
+                st.error(f"API key không hoạt động: {result}")
 
 def save_audio_url(story_id, chapter_number, audio_data):
     """Lưu URL audio và đường dẫn local vào database"""
@@ -1568,6 +1436,427 @@ def save_audio_url(story_id, chapter_number, audio_data):
               (audio_data['url'], audio_data['local_path'], story_id, chapter_number))
     conn.commit()
     conn.close()
+
+class StoryContext:
+    def __init__(self):
+        self.characters = {}  # Lưu trữ thông tin nhân vật
+        self.locations = {}   # Lưu trữ thông tin địa điểm
+        self.current_scene = None  # Thông tin cảnh hiện tại
+        self.style_prompt = ""  # Prompt về phong cách nhất quán
+        self.last_scene_description = ""  # Mô tả cảnh trước đó
+        self.character_first_descriptions = {}  # Lưu mô tả đầu tiên của nhân vật
+        self.scene_history = []  # Lịch sử các cảnh
+        
+    def extract_entities(self, text):
+        """Trích xuất nhân vật và địa điểm từ văn bản"""
+        words = word_tokenize(text)
+        
+        # Tìm các cụm từ viết hoa có thể là tên riêng
+        i = 0
+        while i < len(words):
+            word = words[i]
+            if word[0].isupper() and (i > 0 or len(word) > 1):
+                # Kết hợp các từ viết hoa liên tiếp
+                name_parts = [word]
+                j = i + 1
+                while j < len(words) and words[j][0].isupper():
+                    name_parts.append(words[j])
+                    j += 1
+                
+                name = " ".join(name_parts)
+                
+                # Tìm mô tả xung quanh nhân vật
+                context_start = max(0, i - 5)
+                context_end = min(len(words), j + 5)
+                context = " ".join(words[context_start:context_end])
+                
+                if name not in self.characters:
+                    # Lưu thông tin nhân vật lần đầu xuất hiện
+                    self.characters[name] = {
+                        "first_appearance": text,
+                        "first_context": context,
+                        "description": self._extract_character_description(context),
+                        "count": 1,
+                        "scenes": [len(self.scene_history)]
+                    }
+                    self.character_first_descriptions[name] = self._extract_character_description(context)
+                else:
+                    self.characters[name]["count"] += 1
+                    self.characters[name]["scenes"].append(len(self.scene_history))
+                
+                i = j
+            else:
+                i += 1
+    
+    def _extract_character_description(self, context):
+        """Trích xuất mô tả nhân vật từ context"""
+        # Tìm các từ mô tả xung quanh nhân vật
+        description_keywords = ["là", "có", "mặc", "tuổi", "cao", "trông", "như", "giống"]
+        description = ""
+        
+        for keyword in description_keywords:
+            if keyword in context.lower():
+                # Lấy phần văn bản sau keyword
+                parts = context.lower().split(keyword)
+                if len(parts) > 1:
+                    # Lấy tối đa 10 từ sau keyword
+                    desc = " ".join(parts[1].split()[:10])
+                    if desc:
+                        description += f"{keyword} {desc}. "
+        
+        return description.strip()
+    
+    def update_scene(self, text):
+        """Cập nhật thông tin cảnh hiện tại"""
+        self.last_scene_description = self.current_scene or ""
+        self.current_scene = text
+        self.scene_history.append(text)
+        self.extract_entities(text)
+    
+    def get_character_descriptions(self):
+        """Tạo mô tả về nhân vật cho prompt"""
+        descriptions = []
+        for char, info in self.characters.items():
+            if info["count"] > 0:
+                # Sử dụng mô tả đầu tiên của nhân vật
+                first_desc = self.character_first_descriptions.get(char, "")
+                if first_desc:
+                    descriptions.append(f"character {char} ({first_desc})")
+                else:
+                    descriptions.append(f"character {char}")
+        return ", ".join(descriptions)
+    
+    def get_scene_continuity(self):
+        """Tạo mô tả về tính liên tục của cảnh"""
+        if len(self.scene_history) > 0:
+            # Lấy 2 cảnh gần nhất để tham chiếu
+            recent_scenes = self.scene_history[-2:] if len(self.scene_history) >= 2 else self.scene_history
+            return f"maintain visual continuity with previous scenes: {' | '.join(recent_scenes)}"
+        return ""
+
+def split_text_into_scenes(text):
+    """Split text into scenes based on sentences and paragraphs"""
+    # Split into sentences
+    sentences = sent_tokenize(text)
+    
+    # Group sentences into scenes (3-4 sentences per scene)
+    scenes = []
+    current_scene = []
+    
+    for sentence in sentences:
+        current_scene.append(sentence)
+        if len(current_scene) >= 3:
+            scenes.append(' '.join(current_scene))
+            current_scene = []
+    
+    # Add remaining sentences
+    if current_scene:
+        scenes.append(' '.join(current_scene))
+    
+    return scenes
+
+def translate_to_chinese(text):
+    """Translate text to Chinese using Google Translate API"""
+    translator = Translator()
+    try:
+        result = translator.translate(text, dest='zh-cn')
+        return result.text
+    except Exception as e:
+        st.warning(f"Không thể dịch sang tiếng Trung: {str(e)}")
+        return text
+
+def translate_to_english(text):
+    """Translate text to English using Google Translate API"""
+    translator = Translator()
+    try:
+        result = translator.translate(text, dest='en')
+        return result.text
+    except Exception as e:
+        st.warning(f"Không thể dịch sang tiếng Anh: {str(e)}")
+        return text
+
+def generate_consistent_prompt(scene_text, story_context, style, model="stable-diffusion"):
+    """Tạo prompt ngắn gọn và hiệu quả"""
+    # Cập nhật context với cảnh hiện tại
+    story_context.update_scene(scene_text)
+    
+    # Xác định nhân vật chính trong cảnh hiện tại
+    current_characters = []
+    for char, info in story_context.characters.items():
+        if len(story_context.scene_history) - 1 in info["scenes"]:
+            desc = story_context.character_first_descriptions.get(char, "").strip()
+            if desc:
+                current_characters.append(f"{char} ({desc})")
+            else:
+                current_characters.append(char)
+    
+    # Tạo base prompt dựa trên model
+    if model == "cogview":
+        base_prompt = f"""场景: {scene_text}
+人物: {', '.join(current_characters)}
+风格: {style}风格, 高清细节, 电影级画面"""
+        return base_prompt
+    else:
+        # Tạo prompt ngắn gọn cho Stable Diffusion
+        scene_desc = translate_to_english(scene_text)
+        chars = ', '.join(current_characters)
+        
+        prompt = f"A {style} style scene: {scene_desc}. "
+        if chars:
+            prompt += f"Featuring {chars}. "
+        
+        # Thêm yêu cầu chất lượng
+        prompt += "High quality, detailed, cinematic composition, professional lighting."
+        
+        return prompt
+
+def create_scene_clip(image, audio_path, duration):
+    """Create a video clip from image and audio"""
+    image_clip = ImageClip(np.array(image)).set_duration(duration)
+    audio_clip = AudioFileClip(audio_path)
+    return image_clip.set_audio(audio_clip)
+
+def create_video(scenes, images, audio_files, output_path):
+    """Create final video from scenes, images and audio"""
+    clips = []
+    
+    for image, audio_path in zip(images, audio_files):
+        # Get audio duration
+        audio_clip = AudioFileClip(audio_path)
+        duration = audio_clip.duration
+        audio_clip.close()
+        
+        # Create scene clip
+        clip = create_scene_clip(image, audio_path, duration)
+        clips.append(clip)
+    
+    # Concatenate all clips
+    final_clip = concatenate_videoclips(clips)
+    
+    # Write final video
+    final_clip.write_videofile(
+        output_path,
+        fps=24,
+        codec='libx264',
+        audio_codec='aac'
+    )
+    
+    # Clean up clips
+    final_clip.close()
+    for clip in clips:
+        clip.close()
+
+def generate_image_cogview(prompt, style="realistic"):
+    """Generate image using CogView API"""
+    style_cn = {
+        "realistic": "写实风格",
+        "anime": "动漫风格",
+        "digital art": "数字艺术",
+        "oil painting": "油画风格",
+        "watercolor": "水彩画风格",
+        "pencil sketch": "铅笔素描",
+        "3D render": "3D渲染",
+        "pixel art": "像素艺术",
+        "comic book": "漫画风格"
+    }
+    
+    enhanced_prompt = f"{style_cn.get(style, '写实风格')}, {prompt}, 高质量"
+    
+    try:
+        response = zhipuai.model_api.invoke(
+            model="cogview-3-plus",
+            prompt=enhanced_prompt,
+            timeout=60
+        )
+        
+        if not isinstance(response, dict):
+            raise Exception(f"Invalid response format: {response}")
+            
+        if response.get('code') != 200 or not response.get('success'):
+            error_msg = response.get('msg', 'Unknown error')
+            raise Exception(f"CogView API Error: {error_msg}")
+        
+        data = response.get('data', {})
+        if not isinstance(data, dict):
+            raise Exception(f"Invalid data format: {data}")
+            
+        image_links = data.get('image_links', [])
+        if not image_links or not isinstance(image_links, list):
+            raise Exception(f"No image links received: {data}")
+        
+        image_url = image_links[0].get('url')
+        if not image_url:
+            raise Exception("Invalid image URL")
+        
+        image_response = requests.get(image_url, timeout=30)
+        if image_response.status_code != 200:
+            raise Exception(f"Failed to download image: HTTP {image_response.status_code}")
+        
+        return Image.open(io.BytesIO(image_response.content))
+        
+    except Exception as e:
+        st.error(f"CogView API Debug Info:")
+        st.error(f"Prompt: {enhanced_prompt}")
+        if 'response' in locals():
+            st.error(f"Response: {response}")
+        raise Exception(f"CogView Error: {str(e)}")
+
+def generate_image_sd(prompt, style="realistic", api_key=None):
+    """Generate image using Stable Diffusion API with multiple keys"""
+    if not api_key:
+        api_key = SD_API_KEYS[0]
+    
+    headers = {
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+        "Authorization": f"Bearer {api_key}"
+    }
+    
+    payload = {
+        "text_prompts": [
+            {
+                "text": prompt,
+                "weight": 1
+            },
+            {
+                "text": "blurry, low quality, worst quality, text, watermark, signature, deformed, distorted, disfigured, bad anatomy",
+                "weight": -1
+            }
+        ],
+        "cfg_scale": 7,
+        "height": 1024,
+        "width": 1024,
+        "samples": 1,
+        "steps": 30,
+        "seed": st.session_state.get('last_seed', 42)
+    }
+    
+    try:
+        response = requests.post(
+            SD_API_ENDPOINT,
+            headers=headers,
+            json=payload,
+            timeout=30
+        )
+        
+        if response.status_code != 200:
+            raise Exception(f"Stable Diffusion API Error: {response.text}")
+        
+        result = response.json()
+        
+        if "artifacts" in result and len(result["artifacts"]) > 0:
+            if 'seed' in result["artifacts"][0]:
+                st.session_state['last_seed'] = result["artifacts"][0]['seed']
+            
+            image_data = result["artifacts"][0]["base64"]
+            return Image.open(io.BytesIO(base64.b64decode(image_data)))
+        
+        raise Exception("Không nhận được dữ liệu hình ảnh từ API")
+        
+    except requests.exceptions.Timeout:
+        raise Exception("API phản hồi quá chậm, vui lòng thử lại")
+    except requests.exceptions.RequestException as e:
+        raise Exception(f"Lỗi kết nối: {str(e)}")
+
+def generate_image_gemini_colab(prompt, style="realistic"):
+    """Generate image using Gemini API through Google Colab"""
+    try:
+        # URL của Colab Notebook được expose qua ngrok
+        COLAB_API_URL = os.getenv('COLAB_API_URL', '')
+        if not COLAB_API_URL:
+            raise Exception("Chưa cấu hình COLAB_API_URL. Vui lòng cập nhật trong file .env")
+
+        # Tạo prompt với style
+        enhanced_prompt = f"Create a {style} style image: {prompt}. High quality, detailed, professional lighting and composition."
+        
+        # Chuẩn bị payload
+        payload = {
+            "prompt": enhanced_prompt,
+            "api_key": GEMINI_API_KEY,
+            "style": style
+        }
+        
+        # Gọi API của Colab notebook
+        st.info("🔄 Đang kết nối với Google Colab...")
+        response = requests.post(
+            COLAB_API_URL + "/generate_image",
+            json=payload,
+            timeout=60
+        )
+        
+        # Kiểm tra response
+        if response.status_code != 200:
+            raise Exception(f"Colab API Error: {response.text}")
+            
+        # Parse response
+        result = response.json()
+        if "error" in result:
+            raise Exception(f"Colab Error: {result['error']}")
+            
+        # Lấy ảnh từ base64 string
+        if "image" not in result:
+            raise Exception("Không nhận được dữ liệu hình ảnh từ Colab")
+            
+        image_data = base64.b64decode(result["image"])
+        return Image.open(BytesIO(image_data))
+            
+    except Exception as e:
+        error_msg = str(e)
+        st.error("Gemini Colab API Debug Info:")
+        st.error(f"Error message: {error_msg}")
+        st.error(f"Prompt used: {enhanced_prompt}")
+        
+        # Hỏi người dùng có muốn thử lại với model khác không
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button("🔄 Thử lại với Stable Diffusion"):
+                return generate_image_sd(prompt, style, SD_API_KEYS[0])
+        with col2:
+            if st.button("🔄 Thử lại với CogView"):
+                return generate_image_cogview(prompt, style)
+        
+        raise Exception(f"Gemini Colab Error: {error_msg}")
+
+def generate_image(prompt, style, model="stable-diffusion"):
+    """Generate image using selected model"""
+    max_retries = 3
+    current_try = 0
+    last_error = None
+    
+    while current_try < max_retries:
+        try:
+            if model == "cogview":
+                return generate_image_cogview(prompt, style)
+            elif model == "gemini":
+                return generate_image_gemini_colab(prompt, style)
+            else:
+                # Thử với tất cả API key của Stable Diffusion
+                for i, api_key in enumerate(SD_API_KEYS):
+                    try:
+                        return generate_image_sd(prompt, style, api_key)
+                    except Exception as e:
+                        if "insufficient_balance" in str(e):
+                            if i < len(SD_API_KEYS) - 1:
+                                st.warning(f"API key {i+1} hết balance, đang thử với key tiếp theo...")
+                                continue
+                            else:
+                                st.warning("Đã hết tất cả API key của Stable Diffusion, chuyển sang sử dụng CogView...")
+                                return generate_image_cogview(prompt, style)
+                        else:
+                            raise e
+                
+                # Nếu đã thử hết các key mà vẫn không thành công
+                st.warning("Không thể sử dụng Stable Diffusion, chuyển sang CogView...")
+                return generate_image_cogview(prompt, style)
+                
+        except Exception as e:
+            last_error = e
+            current_try += 1
+            if current_try < max_retries:
+                st.warning(f"Lần thử {current_try} thất bại. Đang thử lại...")
+                time.sleep(2)  # Đợi 2 giây trước khi thử lại
+    
+    raise last_error
 
 if __name__ == "__main__":
     main() 
