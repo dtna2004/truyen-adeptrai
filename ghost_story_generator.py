@@ -483,90 +483,112 @@ def enhance_selected_text(text, enhancement_type):
     return call_api(messages, max_tokens=500)
 
 def text_to_speech(text, voice="banmai", speed="", api_key=None):
-    """Chuyển đổi text thành speech sử dụng FPT API với nhiều API key"""
+    """Chuyển đổi text thành speech sử dụng FPT API hoặc gTTS"""
     global FPT_API_KEYS
     
-    if not FPT_API_KEYS:
-        FPT_API_KEYS = ["rNz01K70Q2lG9s2tvF5oGUyQFa16EiwA"]  # API key mặc định
-    
-    # Nếu có api_key được chỉ định, thử với key đó trước
-    if api_key:
-        keys_to_try = [api_key] + [k for k in FPT_API_KEYS if k != api_key]
-    else:
-        keys_to_try = FPT_API_KEYS
-    
-    url = 'https://api.fpt.ai/hmi/tts/v5'
-    
-    # Thử với từng API key cho đến khi thành công
-    for current_key in keys_to_try:
+    # Thử với FPT API trước
+    if FPT_API_KEYS:
         try:
-            headers = {
-                'api-key': current_key,
-                'speed': speed,
-                'voice': voice
-            }
+            # Nếu có api_key được chỉ định, thử với key đó trước
+            if api_key:
+                keys_to_try = [api_key] + [k for k in FPT_API_KEYS if k != api_key]
+            else:
+                keys_to_try = FPT_API_KEYS
             
-            response = requests.post(url, data=text.encode('utf-8'), headers=headers)
-            if response.status_code == 200:
-                response_data = response.json()
-                if 'async' in response_data:
-                    audio_url = response_data['async']
+            url = 'https://api.fpt.ai/hmi/tts/v5'
+            
+            # Thử với từng API key
+            for current_key in keys_to_try:
+                try:
+                    st.info(f"Đang thử FPT API với key: {current_key[:8]}...")
                     
-                    # Tạo thư mục audio nếu chưa có
-                    os.makedirs('static/audio', exist_ok=True)
-                    audio_filename = f"audio_{uuid.uuid4()}.mp3"
-                    audio_path = os.path.join('static/audio', audio_filename)
+                    headers = {
+                        'api-key': current_key,
+                        'speed': str(speed),
+                        'voice': voice,
+                        'Cache-Control': 'no-cache'
+                    }
                     
-                    # Thử tải file audio với nhiều lần thử
-                    max_retries = 10  # Tăng số lần thử
-                    retry_delay = 3   # Giảm thời gian đợi giữa các lần thử
+                    response = requests.post(url, data=text.encode('utf-8'), headers=headers)
+                    st.write(f"Response status: {response.status_code}")
                     
-                    for attempt in range(max_retries):
-                        try:
-                            time.sleep(retry_delay)
+                    if response.status_code == 200:
+                        response_data = response.json()
+                        st.write(f"Response data: {response_data}")
+                        
+                        if 'async' in response_data:
+                            audio_url = response_data['async']
+                            request_id = response_data.get('request_id', '')
+                            st.info(f"Đã nhận được URL audio: {audio_url}")
                             
-                            # Kiểm tra trạng thái audio trước khi tải
-                            status_response = requests.get(audio_url, timeout=10)
+                            # Tạo thư mục audio nếu chưa có
+                            os.makedirs('static/audio', exist_ok=True)
+                            audio_filename = f"audio_{request_id}.mp3"
+                            audio_path = os.path.join('static/audio', audio_filename)
                             
-                            if status_response.status_code == 200:
-                                # Tải file audio
-                                audio_response = requests.get(audio_url, timeout=30)
-                                
-                                if len(audio_response.content) > 1000:  # Kiểm tra kích thước tối thiểu
-                                    with open(audio_path, 'wb') as f:
-                                        f.write(audio_response.content)
+                            # Thử tải file audio
+                            max_retries = 5  # Giảm số lần thử xuống
+                            retry_delay = 3   # Giảm thời gian chờ
+                            
+                            for attempt in range(max_retries):
+                                try:
+                                    st.info(f"Đang tải audio từ FPT, lần thử {attempt + 1}/{max_retries}...")
+                                    time.sleep(retry_delay)
                                     
-                                    if os.path.exists(audio_path) and os.path.getsize(audio_path) > 1000:
-                                        return True, {'url': audio_url, 'local_path': audio_path}
+                                    # Thêm timestamp để tránh cache
+                                    timestamp = int(time.time())
+                                    url_with_timestamp = f"{audio_url}?t={timestamp}"
                                     
-                            elif status_response.status_code == 404:
-                                if attempt < max_retries - 1:
+                                    status_response = requests.get(
+                                        url_with_timestamp,
+                                        headers={'Cache-Control': 'no-cache'},
+                                        timeout=10
+                                    )
+                                    
+                                    if status_response.status_code == 200:
+                                        content_type = status_response.headers.get('content-type', '')
+                                        if 'audio' in content_type.lower():
+                                            content_length = int(status_response.headers.get('content-length', 0))
+                                            if content_length > 1000:
+                                                with open(audio_path, 'wb') as f:
+                                                    f.write(status_response.content)
+                                                st.success("Đã tạo audio thành công với FPT API!")
+                                                return True, {'url': audio_url, 'local_path': audio_path}
+                                except:
                                     continue
-                                else:
-                                    break  # Thử API key tiếp theo
-                                    
-                        except requests.Timeout:
-                            if attempt < max_retries - 1:
-                                continue
-                            else:
-                                break  # Thử API key tiếp theo
-                                
-                        except Exception as e:
-                            if attempt < max_retries - 1:
-                                continue
-                            else:
-                                break  # Thử API key tiếp theo
-                    
-                    # Nếu đã thử hết số lần với API key hiện tại, tiếp tục với API key khác
+                            
+                            st.warning("Không thể tải audio từ FPT API, chuyển sang sử dụng gTTS...")
+                            break
+                            
+                except Exception as e:
+                    st.error(f"Lỗi khi gọi FPT API với key {current_key[:8]}: {str(e)}")
                     continue
-                    
-            elif response.status_code == 401:  # API key không hợp lệ
-                continue  # Thử API key tiếp theo
-                
+        
         except Exception as e:
-            continue  # Thử API key tiếp theo
+            st.error(f"Lỗi khi sử dụng FPT API: {str(e)}")
     
-    return False, "Không thể tạo audio sau khi thử tất cả API key. Vui lòng kiểm tra lại API key hoặc thử lại sau."
+    # Nếu FPT API không thành công, sử dụng gTTS
+    try:
+        st.info("Đang tạo audio bằng gTTS...")
+        tts = gTTS(text=text, lang='vi', slow=False)
+        
+        # Tạo thư mục audio nếu chưa có
+        os.makedirs('static/audio', exist_ok=True)
+        audio_filename = f"audio_gtts_{uuid.uuid4()}.mp3"
+        audio_path = os.path.join('static/audio', audio_filename)
+        
+        # Lưu file audio
+        tts.save(audio_path)
+        
+        if os.path.exists(audio_path) and os.path.getsize(audio_path) > 1000:
+            st.success("Đã tạo audio thành công với gTTS!")
+            return True, {'url': None, 'local_path': audio_path}
+        else:
+            raise Exception("File audio tạo bởi gTTS không hợp lệ")
+            
+    except Exception as e:
+        st.error(f"Lỗi khi sử dụng gTTS: {str(e)}")
+        return False, "Không thể tạo audio bằng cả FPT API và gTTS"
 
 def get_story_data(story_id):
     conn = get_db()
@@ -605,8 +627,8 @@ def get_story_data(story_id):
         chapter_data = []
         for chapter in chapters:
             chapter_info = {
-                "chapter_number": chapter[0],
-                "content": chapter[1],
+                    "chapter_number": chapter[0],
+                    "content": chapter[1],
                 "created_at": chapter[2],
                 "audio_url": None  # Mặc định không có audio
             }
@@ -959,7 +981,7 @@ def main():
     # Menu chính
     menu = st.sidebar.selectbox(
         "Chọn chức năng:",
-        ["Tạo Truyện Mới", "Danh Sách Truyện", "Tạo Audio", "Tạo Video", "Cài Đặt"]
+        ["Tạo Truyện Mới", "Danh Sách Truyện", "Viết Truyện Tự Động", "Tạo Video", "Cài Đặt"]
     )
     
     if menu == "Tạo Truyện Mới":
@@ -1115,105 +1137,148 @@ def main():
             else:
                 st.info("Không tìm thấy truyện nào phù hợp")
 
-    elif menu == "Tạo Audio":
-        st.header("Tạo Audio Từ Truyện")
+    elif menu == "Viết Truyện Tự Động":
+        st.header("Viết Truyện Tự Động")
         
-        # Phần cấu hình API FPT
-        st.subheader("Cấu hình API FPT")
-        api_keys_str = st.text_area(
-            "Nhập các API key FPT (mỗi key một dòng):",
-            value="rNz01K70Q2lG9s2tvF5oGUyQFa16EiwA",  # API key mặc định
-            help="Thêm nhiều API key để tăng khả năng chuyển đổi"
-        )
-        fpt_api_keys = [key.strip() for key in api_keys_str.split('\n') if key.strip()]
-        
-        # Chọn truyện để tạo audio
+        # Chọn truyện để viết
         stories = get_story_list()
         if not stories:
             st.info("Chưa có truyện nào được tạo")
         else:
+            # Tạo dictionary ánh xạ story_id với tên truyện
+            story_titles = {}
+            for story in stories:
+                title = story['outline'].split('\n')[0] if story['outline'] else "Không có tiêu đề"
+                story_titles[story['story_id']] = title
+            
             selected_story = st.selectbox(
-                "Chọn truyện để tạo audio:",
-                options=[story['story_id'] for story in stories],
-                format_func=lambda x: next(s['outline'].split('\n')[0] for s in stories if s['story_id'] == x)
+                "Chọn truyện để viết:",
+                options=list(story_titles.keys()),
+                format_func=lambda x: story_titles[x]
             )
             
             if selected_story:
                 story_data = get_story_data(selected_story)
                 chapters = get_story_chapters(selected_story)
                 
-                # Cấu hình giọng đọc
-                col1, col2 = st.columns(2)
-                with col1:
-                    voice = st.selectbox(
-                        "Chọn giọng đọc:",
-                        ["banmai", "thuminh", "leminh", "myan", "lannhi", "linhsan"]
-                    )
-                with col2:
-                    speed = st.slider(
-                        "Tốc độ đọc:",
-                        min_value=-3,
-                        max_value=3,
-                        value=0
-                    )
+                # Hiển thị thông tin truyện
+                st.subheader(f"Thông tin truyện: {story_data['title']}")
+                st.write(f"Tổng số chương: {story_data['total_chapters']}")
+                st.write(f"Số chương đã viết: {len(chapters)}")
                 
-                # Hiển thị danh sách chương và nút tạo audio
-                st.subheader(f"Danh sách chương - {story_data['title']}")
+                # Tạo tab cho các chức năng khác nhau
+                tab1, tab2, tab3 = st.tabs(["Viết Chương Mới", "Viết Nhiều Chương", "Quản Lý Chương"])
                 
-                for chapter in chapters:
-                    with st.expander(f"Chương {chapter['chapter_number']}"):
-                        st.write(chapter['content'][:200] + "...")  # Hiển thị preview nội dung
-                        
-                        col1, col2 = st.columns([3, 1])
-                        with col1:
-                            # Kiểm tra xem đã có audio chưa
-                            if 'audio_url' in chapter and chapter['audio_url']:
-                                st.markdown(f"""
-                                <audio controls>
-                                    <source src="{chapter['audio_url']}" type="audio/mp3">
-                                    Trình duyệt của bạn không hỗ trợ audio.
-                                </audio>
-                                """, unsafe_allow_html=True)
-                            else:
-                                st.info("Chưa có audio")
-                        
-                        with col2:
-                            if st.button("Tạo Audio", key=f"create_audio_{chapter['chapter_number']}"):
-                                with st.spinner('Đang tạo audio...'):
-                                    # Thử với từng API key cho đến khi thành công
-                                    for api_key in fpt_api_keys:
-                                        success, result = text_to_speech(
-                                            chapter['content'],
-                                            voice=voice,
-                                            speed=str(speed),
-                                            api_key=api_key
+                with tab1:
+                    st.subheader("Viết Chương Mới")
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        next_chapter = len(chapters) + 1
+                        chapter_number = st.number_input(
+                            "Số chương:", 
+                            min_value=1, 
+                            max_value=story_data['total_chapters'], 
+                            value=min(next_chapter, story_data['total_chapters'])
+                        )
+                    with col2:
+                        word_count = st.number_input("Số từ:", min_value=500, max_value=5000, value=2000, step=100)
+                    
+                    if st.button("Tạo chương mới"):
+                        with st.spinner(f'Đang viết chương {chapter_number}...'):
+                            chapter_content = generate_chapter(
+                                f"Viết chương {chapter_number}",
+                                story_data['outline'],
+                                chapter_number,
+                                story_data['total_chapters'],
+                                word_count
+                            )
+                            st.session_state['current_chapter'] = chapter_content
+                            st.markdown("### Nội dung chương:")
+                            st.write(chapter_content)
+                            
+                            if st.button("Lưu chương"):
+                                save_chapter(selected_story, chapter_number, chapter_content)
+                                st.success(f"Đã lưu chương {chapter_number}!")
+                                st.rerun()
+                
+                with tab2:
+                    st.subheader("Viết Nhiều Chương")
+                    col1, col2, col3 = st.columns(3)
+                    with col1:
+                        # Đảm bảo start_chapter không vượt quá total_chapters
+                        max_start = min(next_chapter, story_data['total_chapters'])
+                        start_chapter = st.number_input(
+                            "Từ chương:", 
+                            min_value=1, 
+                            max_value=story_data['total_chapters'],
+                            value=max_start
+                        )
+                    with col2:
+                        # Đảm bảo end_chapter luôn lớn hơn hoặc bằng start_chapter
+                        min_end = start_chapter
+                        max_end = story_data['total_chapters']
+                        default_end = min(start_chapter + 4, max_end)
+                        end_chapter = st.number_input(
+                            "Đến chương:", 
+                            min_value=min_end,
+                            max_value=max_end,
+                            value=default_end
+                        )
+                    with col3:
+                        batch_word_count = st.number_input("Số từ mỗi chương:", min_value=500, max_value=5000, value=2000, step=100)
+                    
+                    if st.button("Bắt đầu viết tự động"):
+                        with st.spinner(f'Đang viết các chương từ {start_chapter} đến {end_chapter}...'):
+                            progress_bar = st.progress(0)
+                            for chapter_num in range(start_chapter, end_chapter + 1):
+                                progress = (chapter_num - start_chapter) / (end_chapter - start_chapter + 1)
+                                progress_bar.progress(progress)
+                                
+                                chapter_content = generate_chapter(
+                                    f"Viết chương {chapter_num}",
+                                    story_data['outline'],
+                                    chapter_num,
+                                    story_data['total_chapters'],
+                                    batch_word_count
+                                )
+                                save_chapter(selected_story, chapter_num, chapter_content)
+                                st.success(f"Đã viết xong chương {chapter_num}")
+                            
+                            progress_bar.progress(1.0)
+                            st.success("Đã hoàn thành viết tất cả các chương!")
+                            st.rerun()
+                
+                with tab3:
+                    st.subheader("Quản Lý Chương")
+                    for chapter in chapters:
+                        with st.expander(f"Chương {chapter['chapter_number']}"):
+                            st.write(chapter['content'][:200] + "...")  # Preview nội dung
+                            
+                            col1, col2, col3 = st.columns(3)
+                            with col1:
+                                if st.button("Viết lại", key=f"rewrite_chapter_{chapter['chapter_number']}_{chapter['created_at']}"):
+                                    with st.spinner('Đang viết lại...'):
+                                        new_content = generate_chapter(
+                                            f"Viết lại chương {chapter['chapter_number']}",
+                                            story_data['outline'],
+                                            chapter['chapter_number'],
+                                            story_data['total_chapters'],
+                                            len(chapter['content'].split())
                                         )
-                                        if success:
-                                            st.success("Đã tạo audio thành công!")
-                                            # Hiển thị audio player
-                                            st.markdown(f"""
-                                            <audio controls>
-                                                <source src="{result['url']}" type="audio/mp3">
-                                                Trình duyệt của bạn không hỗ trợ audio.
-                                            </audio>
-                                            """, unsafe_allow_html=True)
-                                            
-                                            # Thêm nút tải về
-                                            with open(result['local_path'], 'rb') as f:
-                                                st.download_button(
-                                                    label="Tải audio về máy",
-                                                    data=f,
-                                                    file_name=f"chuong_{chapter['chapter_number']}_audio.mp3",
-                                                    mime="audio/mp3"
-                                                )
-                                            
-                                            # Lưu URL audio vào database
-                                            save_audio_url(selected_story, chapter['chapter_number'], result)
-                                            break
-                                        else:
-                                            st.error(f"Lỗi với API key {api_key[:10]}...: {result}")
-                                            continue
-    
+                                        save_chapter(selected_story, chapter['chapter_number'], new_content)
+                                        st.success("Đã viết lại thành công!")
+                                        st.write(new_content)
+                            
+                            with col2:
+                                if st.button("Xem đầy đủ", key=f"view_chapter_{chapter['chapter_number']}_{chapter['created_at']}"):
+                                    st.write(chapter['content'])
+                            
+                            with col3:
+                                if st.button("Xóa", key=f"delete_chapter_{chapter['chapter_number']}_{chapter['created_at']}"):
+                                    delete_chapter(selected_story, chapter['chapter_number'])
+                                    st.success(f"Đã xóa chương {chapter['chapter_number']}!")
+                                    st.rerun()
+
     elif menu == "Tạo Video":
         st.header("Tạo Video Từ Truyện")
         
